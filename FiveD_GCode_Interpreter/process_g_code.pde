@@ -435,6 +435,11 @@ bool process_string(char instruction[], int size)
 				Serial.println(ex[extruder_in_use]->get_temperature());
 				return false;
 
+                        //custom code to wait until temperature is reached
+                        case 111:
+                                ex[extruder_in_use]->wait_for_temperature();
+                                break;
+
 			//turn fan on
 			case 106:
 				ex[extruder_in_use]->set_cooler(255);

@@ -58,7 +58,7 @@
 
 //our maximum feedrates
 #define FAST_XY_FEEDRATE 4000.0
-#define FAST_Z_FEEDRATE  60.0
+#define FAST_Z_FEEDRATE  100.0
 
 // Data for acceleration calculations
 // Comment out the next line to turn accelerations off
