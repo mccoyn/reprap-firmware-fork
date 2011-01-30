@@ -17,8 +17,6 @@ private:
 
   //extruder* ext;               // The extruder I'm currently using - keep this up to date...
 
-  FloatPoint units;            // Factors for converting either mm or inches to steps
-
   FloatPoint target_position;  // Where it's going
   FloatPoint delta_position;   // The difference between the two
   float distance;              // How long the path is
@@ -49,32 +47,38 @@ private:
   bool nullmove;               // this move is zero length
   bool real_move;              // Flag to know if we've changed something physical
   volatile bool live;                   // Flag for when we're plotting a line
+  
+// Variables for extruder shutdown reversal
+#if E_SHUTDOWN_STEPS > 0
+  bool start_extruder;
+  bool stop_extruder;
+#endif
 
 // Internal functions that need not concern the user
 
   // Take a single step
 
-  void do_x_step();               
-  void do_y_step();
-  void do_z_step();
-  void do_e_step();
+  inline void do_x_step();               
+  inline void do_y_step();
+  inline void do_z_step();
+  inline void do_e_step();
   
   // Can this axis step?
   
-  bool can_step(byte min_pin, byte max_pin, long current, long target, byte dir);
+  inline bool can_step(byte min_pin, byte max_pin, long max_steps, long current_steps, long target_steps, byte dir);
   
   // Read a limit switch
   
-  bool read_switch(byte pin);
+  inline bool read_switch(byte pin);
   
   // Work out the number of microseconds between steps
   
-  long calculate_feedrate_delay(const float& feedrate);
+  inline long calculate_feedrate_delay(const float& feedrate);
   
   // Switch the steppers on and off
   
-  void enable_steppers();
-  void disable_steppers();
+  inline void enable_steppers();
+  inline void disable_steppers();
   
   // Custom short delay function (microseconds)
   
@@ -91,23 +95,25 @@ public:
   
   // Start the DDA
   
-  void dda_start();
+  inline void dda_start();
   
   // Do one step of the DDA
   
-  void dda_step();
+  inline void dda_step();
   
   // Are we running at the moment?
   
-  bool active();
-  
-  // True for mm; false for inches
-  
-  void set_units(bool using_mm);
+  inline bool active();
   
   // Record the selection of a new extruder
   
   //void set_extruder(extruder* ex);
+  
+  inline bool get_start_extruder();
+  inline bool get_stop_extruder();
+
+  inline void set_start_extruder(bool v);
+  inline void set_stop_extruder(bool v);
 };
 
 // Short functions inline to save memory; particularly useful in the Arduino
@@ -170,5 +176,38 @@ inline bool cartesian_dda::read_switch(byte pin)
 		return digitalRead(pin) && digitalRead(pin);
 	#endif
 }
+
+inline bool cartesian_dda::get_start_extruder()
+{
+#if E_SHUTDOWN_STEPS > 0
+  return start_extruder;
+#else
+  return false;
+#endif
+}
+
+inline bool cartesian_dda::get_stop_extruder()
+{
+#if E_SHUTDOWN_STEPS > 0
+  return stop_extruder;
+#else
+  return false;
+#endif
+}
+
+inline void cartesian_dda::set_start_extruder(bool v)
+{
+#if E_SHUTDOWN_STEPS > 0
+  start_extruder = v;
+#endif
+}
+
+inline void cartesian_dda::set_stop_extruder(bool v)
+{
+#if E_SHUTDOWN_STEPS > 0
+  stop_extruder = v;
+#endif
+}
+
 
 #endif

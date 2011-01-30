@@ -84,8 +84,12 @@ extruder::extruder(byte md_pin, byte ms_pin, byte h_pin, byte f_pin, byte t_pin,
         max_celsius = 0;
         heater_low = 64;
         heater_high = 255;
+        heater_fast = 255;
         heater_current = 0;
         valve_open = false;
+        last_celsius = -1;
+        last_celsius_time = 0;
+        waiting_for_heater = false;
         
 //this is for doing encoder based extruder control
 //        rpm = 0;
@@ -93,7 +97,6 @@ extruder::extruder(byte md_pin, byte ms_pin, byte h_pin, byte f_pin, byte t_pin,
 //        error = 0;
 //        last_extruder_error = 0;
 //        error_delta = 0;
-        e_direction = EXTRUDER_FORWARD;
         
         //default to cool
         set_target_temperature(target_celsius);
@@ -101,52 +104,30 @@ extruder::extruder(byte md_pin, byte ms_pin, byte h_pin, byte f_pin, byte t_pin,
 
 
 byte extruder::wait_till_hot()
-{  
-  count = 0;
-  oldT = get_temperature();
+{
+  waiting_for_heater = true;
   while (get_temperature() < target_celsius - HALF_DEAD_ZONE)
   {
 	manage_all_extruders();
-        count++;
-        if(count > 20)
-        {
-            newT = get_temperature();
-            if(newT > oldT)
-               oldT = newT;
-            else
-                return 1;
-            count = 0;
-        }
+        send_status();
 	delay(1000);
   }
+  waiting_for_heater = false;
   return 0;
 }
 
-/*
 byte extruder::wait_till_cool()
 {  
-  count = 0;
-  oldT = get_temperature();
+  waiting_for_heater = true;
   while (get_temperature() > target_celsius + HALF_DEAD_ZONE)
   {
 	manage_all_extruders();
-        count++;
-        if(count > 20)
-        {
-            newT = get_temperature();
-            if(newT < oldT)
-               oldT = newT;
-            else
-                return 1;
-            count = 0;
-        }
+        send_status();
 	delay(1000);
   }
+  waiting_for_heater = false;
   return 0;
 }
-*/
-
-
 
 void extruder::valve_set(bool open, int dTime)
 {
@@ -158,11 +139,21 @@ void extruder::valve_set(bool open, int dTime)
         digitalWrite(valve_en_pin, 0);
 }
 
+void extruder::set_target_temperature_and_wait(int temp)
+{
+  set_target_temperature(temp);
+  
+  if (temp < get_temperature())
+    wait_till_cool();
+  else
+    wait_till_hot();
+}
+
 
 void extruder::set_target_temperature(int temp)
 {
 	target_celsius = temp;
-	max_celsius = (temp*11)/10;
+	max_celsius = temp + 5;
 
         // If we've turned the heat off, we might as well disable the extrude stepper
        // if(target_celsius < 1)
@@ -186,30 +177,32 @@ int extruder::get_temperature()
 	int celsius = 0;
 	byte i;
 
-	for (i=1; i<NUMTEMPS; i++)
+	for (i=0; i<NUMTEMPS; i++)
 	{
 		if (temptable[i][0] > raw)
-		{
-			celsius  = temptable[i-1][1] + 
-				(raw - temptable[i-1][0]) * 
-				(temptable[i][1] - temptable[i-1][1]) /
-				(temptable[i][0] - temptable[i-1][0]);
-
 			break;
-		}
 	}
 
-        // Overflow: Set to last value in the table
-        if (i == NUMTEMPS) celsius = temptable[i-1][1];
+        // Overflow: Set to fail safe value
+        if (  (i >= NUMTEMPS) || (i <= 0)  )
+            celsius = 511;
+        else
+            celsius  = temptable[i-1][1] + 
+                (raw - temptable[i-1][0]) * 
+                (temptable[i][1] - temptable[i-1][1]) /
+                (temptable[i][0] - temptable[i-1][0]);
 
         // Clamp
         if (celsius > 511) celsius = 511;
         else if (celsius < 0) celsius = 0; 
   
-	return celsius;
+	last_celsius = celsius;
 #else
-  return ( 5.0 * sample_temperature() * 100.0) / 1024.0;
+  last_celsius = ( 5.0 * sample_temperature() * 100.0) / 1024.0;
 #endif
+
+  last_celsius_time = millis();
+  return last_celsius;
 }
 
 
@@ -219,15 +212,34 @@ int extruder::get_temperature()
 */
 int extruder::sample_temperature()
 {
-	int raw = 0;
+        int raw;
+	int sum = 0;
+        int largest = 0;
+        int smallest = 1024;
 	
 	//read in a certain number of samples
 	for (byte i=0; i<TEMPERATURE_SAMPLES; i++)
-		raw += analogRead(temp_pin);
-		
-	//average the samples
-	raw = raw/TEMPERATURE_SAMPLES;
+        {
+                raw = analogRead(temp_pin);
+                sum += raw;
+                if (raw > largest)
+                    largest = raw;
+                if (raw < smallest)
+                    smallest = raw;
+        }
+                    
 
+        //drop the largest and smallest and get the average
+        if (smallest < largest)
+        {
+                sum = sum - smallest - largest;
+                raw = sum / (TEMPERATURE_SAMPLES - 2);
+        }
+        else
+        {
+                raw = sum / TEMPERATURE_SAMPLES;
+        }
+		
 	//send it back.
 	return raw;
 }
@@ -241,22 +253,35 @@ int extruder::sample_temperature()
  */
 void extruder::manage()
 {
-	//make sure we know what our temp is.
-	int current_celsius = get_temperature();
         byte newheat = 0;
-  
+
+	//make sure we know what our temp is.
+	last_celsius = get_temperature();
+        
         //put the heater into high mode if we're not at our target.
-        if (current_celsius < target_celsius)
-                newheat = heater_high;
+        if (last_celsius < target_celsius)
+        {
+                if (waiting_for_heater)
+                      newheat = heater_fast;
+                else
+                      newheat = heater_high;
+        }
         //put the heater on low if we're at our target.
-        else if (current_celsius < max_celsius)
-                newheat = heater_low;
+        else if (last_celsius < max_celsius)
+        {
+                if (waiting_for_heater)
+                      newheat = 0;
+                else
+                      newheat = heater_low;
+        }
+        //shut the heater off if things are getting out of hand
+        else
+                newheat = 0;
         
         // Only update heat if it changed
-        if (heater_current != newheat) {
-                heater_current = newheat;
-                analogWrite(heater_pin, heater_current);
-        }
+        if (heater_current != newheat)
+          heater_current = newheat;
+        analogWrite(heater_pin, heater_current);
 }
 
 

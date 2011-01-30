@@ -66,7 +66,7 @@ FloatPoint sp;
 
 inline void specialMoveX(const float& x, const float& feed)
 {
-  sp = where_i_am;
+  sp = where_i_am_world;
   sp.x = x;
   sp.f = feed;
   qMove(sp);
@@ -74,7 +74,7 @@ inline void specialMoveX(const float& x, const float& feed)
 
 inline void specialMoveY(const float& y, const float& feed)
 {
-  sp = where_i_am;
+  sp = where_i_am_world;
   sp.y = y;
   sp.f = feed;
   qMove(sp);
@@ -82,7 +82,7 @@ inline void specialMoveY(const float& y, const float& feed)
 
 inline void specialMoveZ(const float& z, const float& feed)
 {
-  sp = where_i_am;
+  sp = where_i_am_world;
   sp.z = z; 
   sp.f = feed;
   qMove(sp);
@@ -166,9 +166,12 @@ bool get_and_do_command()
                   Serial.println(debugstring);
                   debugstring[0] = 0;
                 } else
+                
+                  //send our status values back
+                  send_status();
                   Serial.println("ok");
                   
-    return busy;
+                  return busy;
 	}
 	else
 	{
@@ -248,7 +251,7 @@ bool process_string(char instruction[], int size)
 	if (gc.seen & GCODE_G)
 	{
 		last_gcode_g = gc.G;	/* remember this for future instructions */
-		fp = where_i_am;
+		fp = where_i_am_world;
 		if (abs_mode)
 		{
 			if (gc.seen & GCODE_X)
@@ -283,6 +286,7 @@ bool process_string(char instruction[], int size)
                 {
 			//Rapid move
 			case 0:
+                                
                                 fr = fp.f;
                                 fp.f = FAST_XY_FEEDRATE;
                                 qMove(fp);
@@ -291,38 +295,64 @@ bool process_string(char instruction[], int size)
                                 
                         // Controlled move
 			case 1:
+                                wakeup();
                                 qMove(fp);
                                 return true;
                                 
                         //go home.
 			case 28:
-                                where_i_am.f = SLOW_XY_FEEDRATE;
-                                specialMoveX(where_i_am.x - 5, FAST_XY_FEEDRATE);
-                                specialMoveX(where_i_am.x - 250, FAST_XY_FEEDRATE);
-                                where_i_am.x = 0;
-                                where_i_am.f = SLOW_XY_FEEDRATE;
-                                specialMoveX(where_i_am.x + 1, SLOW_XY_FEEDRATE);
-                                specialMoveX(where_i_am.x - 10, SLOW_XY_FEEDRATE);                                
-                                where_i_am.x = 0;
+                                wakeup();
                                 
-                                specialMoveY(where_i_am.y - 5, FAST_XY_FEEDRATE);
-                                specialMoveY(where_i_am.y - 250, FAST_XY_FEEDRATE);
-                                where_i_am.y = 0;
-                                where_i_am.f = SLOW_XY_FEEDRATE;
-                                specialMoveY(where_i_am.y + 1, SLOW_XY_FEEDRATE);
-                                specialMoveY(where_i_am.y - 10, SLOW_XY_FEEDRATE);                                
-                                where_i_am.y = 0; 
- 
-                                where_i_am.f = SLOW_Z_FEEDRATE;
-                                specialMoveZ(where_i_am.z - 0.5, FAST_Z_FEEDRATE);
-                                specialMoveZ(where_i_am.z - 250, FAST_Z_FEEDRATE);
-                                where_i_am.z = 0;
-                                where_i_am.f = SLOW_Z_FEEDRATE;
-                                specialMoveZ(where_i_am.z + 1, SLOW_Z_FEEDRATE);
-                                specialMoveZ(where_i_am.z - 2, SLOW_Z_FEEDRATE);                                
-                                where_i_am.z = 0;
-                                where_i_am.f = SLOW_XY_FEEDRATE;     // Most sensible feedrate to leave it in                    
+                                // Fast home x
+                                specialMoveX(-250, FAST_XY_FEEDRATE);
+                                sp = where_i_am_world;
+                                sp.x = 0;
+                                setPosition(sp);
+                                
+                                // slow home x
+                                specialMoveX(1, SLOW_XY_FEEDRATE);
+                                specialMoveX(-10, SLOW_XY_FEEDRATE);                                
+                                sp = where_i_am_world;
+                                sp.x = 0;
+                                setPosition(sp);
+                                
+                                // Fast home y
+                                specialMoveY(-250, FAST_XY_FEEDRATE);
+                                sp = where_i_am_world;
+                                sp.y = 0;
+                                setPosition(sp);
+                                
+                                // slow home y
+                                specialMoveY(1, SLOW_XY_FEEDRATE);
+                                specialMoveY(-10, SLOW_XY_FEEDRATE);                                
+                                sp = where_i_am_world;
+                                sp.y = 0;
+                                setPosition(sp);
+                                
+                                // fast home z 
+                                specialMoveZ(-250, FAST_Z_FEEDRATE);
+                                sp = where_i_am_world;
+                                sp.z = 0;
+                                setPosition(sp);
+                                
+                                // slow home z 
+                                specialMoveZ(0.5, SLOW_Z_FEEDRATE);
+                                specialMoveZ(-10, SLOW_Z_FEEDRATE);                                
 
+                                // set initial position
+                                sp.x = 0;
+                                sp.y = 0;
+                                sp.z = 0;
+                                sp.e = where_i_am_world.e;
+                                sp.f = SLOW_XY_FEEDRATE;     // Most sensible feedrate to leave it in                    
+                                setPosition(sp);
+                                
+
+				return true;
+
+			//Set position as fp
+			case 92: 
+                                setPosition(fp);
 				return true;
 
 
@@ -339,8 +369,30 @@ bool process_string(char instruction[], int size)
 
   			 //Dwell
 			case 4:
-				delay((int)(gc.P + 0.5));  
-				break;
+			{
+                                if (ex[extruder_in_use]->get_target_temperature() <= 0)
+                                  standby();
+                                
+				int start = millis();
+                                int current = start;
+                                float duration = gc.P;
+                                
+				while (current - start < duration)
+				{
+					if (current - start >= 1000)
+					{
+						start += 1000;
+						duration -= 1000;
+                                                Serial.println(duration/1000);
+						send_status();
+					}
+
+					manage_all_extruders();
+					current = millis();
+				}
+                                wakeup();
+			}
+ 				break;
 
 			//Inches for Units
 			case 20:
@@ -362,11 +414,6 @@ bool process_string(char instruction[], int size)
 				abs_mode = false;
 				break;
 
-			//Set position as fp
-			case 92: 
-                                setPosition(fp);
-				break;
-
 			default:
 				Serial.print("huh? G");
 				Serial.println(gc.G, DEC);
@@ -379,6 +426,31 @@ bool process_string(char instruction[], int size)
 	//find us an m code.
 	if (gc.seen & GCODE_M)
 	{
+  
+                // Process the buffered commands first
+                // If we get one, return immediately
+
+		switch (gc.M)
+                {
+			//turn extruder on, forward
+			case 101:
+				//ex[extruder_in_use]->set_direction(1);
+				//ex[extruder_in_use]->set_speed(extruder_speed);
+				return true;
+
+			//turn extruder on, reverse
+			case 102:
+				//ex[extruder_in_use]->set_direction(0);
+				//ex[extruder_in_use]->set_speed(extruder_speed);
+				return true;
+
+			//turn extruder off
+			case 103:
+				//ex[extruder_in_use]->set_speed(0);
+				return true;
+
+                }
+  
             // Wait till the q is empty first
             while(!qEmpty()) delay(WAITING_DELAY);
             
@@ -386,6 +458,7 @@ bool process_string(char instruction[], int size)
 		{
 			//TODO: this is a bug because search_string returns 0.  gotta fix that.
 			case 0:
+                                standby();
 				break;
 				/*
 				 case 0:
@@ -401,26 +474,6 @@ bool process_string(char instruction[], int size)
 				 break;
 				 */
 
-// jglauche: re-activate M101-M103 and M108 codes to support both 3d & 5d code
-
-
-			//turn extruder on, forward
-			case 101:
-				ex[extruder_in_use]->set_direction(1);
-				//ex[extruder_in_use]->set_speed(extruder_speed);
-				break;
-
-			//turn extruder on, reverse
-			case 102:
-				ex[extruder_in_use]->set_direction(0);
-				//ex[extruder_in_use]->set_speed(extruder_speed);
-				break;
-
-			//turn extruder off
-			case 103:
-				//ex[extruder_in_use]->set_speed(0);
-				break;
-
 			//custom code for temperature control
 			case 104:
 				if (gc.seen & GCODE_S)
@@ -434,11 +487,6 @@ bool process_string(char instruction[], int size)
 				Serial.print("T:");
 				Serial.println(ex[extruder_in_use]->get_temperature());
 				return false;
-
-                        //custom code to wait until temperature is reached
-                        case 111:
-                                ex[extruder_in_use]->wait_for_temperature();
-                                break;
 
 			//turn fan on
 			case 106:
@@ -456,9 +504,22 @@ bool process_string(char instruction[], int size)
 					extruder_speed = gc.S;
 				break;
 
- 			case 109: // Base plate heater on/off
+                        //custom code to wait until temperature is reached
+			case 109:
+                                wakeup();
+				if (gc.seen & GCODE_S)
+					ex[extruder_in_use]->set_target_temperature_and_wait((int)gc.S);
+                                else
+                                        ex[extruder_in_use]->wait_for_temperature();
+				break;
+
+
+ 			case 140: // Base plate heater on/off
  				if (gc.seen & GCODE_S)
- 				  digitalWrite(BASE_HEATER_PIN, gc.S != 0);
+ 				{
+    				  if ((signed char)BASE_HEATER_PIN >= 0)
+ 				    digitalWrite(BASE_HEATER_PIN, gc.S != 0);
+ 				}
  				break;
 
 // The valve (real, or virtual...) is now the way to control any extruder (such as
@@ -473,6 +534,43 @@ bool process_string(char instruction[], int size)
                         case 127:
                                 ex[extruder_in_use]->valve_set(false, (int)(gc.P + 0.5));
                                 break;
+                                
+
+                        // Debug temperature pin
+                        case 1001:
+                                {
+                                unsigned d = (int)(gc.S*1000 + 0.5);
+                                unsigned short h = 0;
+                                unsigned short t = millis();
+                                unsigned p = t - d;
+                                float s = (float)t + 28;
+                                while (true)
+                                //for (int i = 0; i < 200; i++)
+                                {
+                                  delay(2*d - (t - p));
+                                  p += d;
+                                  t = millis();
+
+                                  int c = ex[extruder_in_use]->get_temperature();
+                                  if (t < p)
+                                    h++;
+                                  float f = (h*(float)(0x00010000) + (float)t - s) / 1000.0f;
+  				  Serial.print(f, 3);
+  				  Serial.print("\t");
+    				  Serial.print(c);
+    
+                                  for (int pin = 0; pin < 6; pin++)
+                                    {
+                                    unsigned sum = 0;
+                                    for (int j = 0; j < 16; j++)
+                                      sum += analogRead(pin);
+                                    Serial.print("\t");
+                                    Serial.print((sum+8) / 16);
+                                    }
+                                  Serial.println();
+                                }
+                                }
+				return false;
                                                                 
 
 			default:
@@ -538,4 +636,20 @@ int scan_int(char *str, int *valp, unsigned int *seen, unsigned int flag)
 }
 
 
-
+void send_status()
+{
+  //send our status values back
+  Serial.print("S: X");
+  Serial.print(where_i_am_world.x);
+  Serial.print(" Y");
+  Serial.print(where_i_am_world.y);
+  Serial.print(" Z");
+  Serial.print(where_i_am_world.z);
+  Serial.print(" F");
+  Serial.print(where_i_am_world.f);
+  Serial.print(" E");
+  Serial.print(where_i_am_world.e);
+  Serial.print(" T");
+  Serial.print(ex[extruder_in_use]->get_last_temperature());
+  Serial.println();
+}

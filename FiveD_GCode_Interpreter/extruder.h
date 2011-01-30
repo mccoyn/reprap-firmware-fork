@@ -20,8 +20,8 @@ void new_extruder(byte e);
 
 #if USE_EXTRUDER_CONTROLLER == false
 
-#define EXTRUDER_FORWARD false
-#define EXTRUDER_REVERSE true
+#define EXTRUDER_FORWARD true
+#define EXTRUDER_REVERSE false
 
 class extruder
 {
@@ -33,12 +33,14 @@ private:
     int max_celsius;
     byte heater_low;
     byte heater_high;
+    byte heater_fast;
     byte heater_current;
     int extrude_step_count;
 
 // These are used for temperature control    
-    byte count ;
-    int oldT, newT;
+    int last_celsius;
+    int last_celsius_time;
+    bool waiting_for_heater;
     
 //this is for doing encoder based extruder control
 //    int rpm;
@@ -46,7 +48,6 @@ private:
 //    int error;
 //    int last_extruder_error;
 //    int error_delta;
-    bool e_direction;
     bool valve_open;
 
 // The pins we control
@@ -54,7 +55,7 @@ private:
     signed int step_en_pin;
     
      byte wait_till_hot();
-     //byte wait_till_cool();
+     byte wait_till_cool();
      void temperature_error(); 
      int sample_temperature();
      
@@ -68,8 +69,10 @@ public:
    //void set_speed(float es);
    void set_cooler(byte e_speed);
    void set_target_temperature(int temp);
+   void set_target_temperature_and_wait(int temp);
    int get_target_temperature();
    int get_temperature();
+   inline int get_last_temperature(long maxAge_ms = -1);
    void manage();
 // Interrupt setup and handling functions for stepper-driven extruders
    
@@ -122,10 +125,17 @@ inline void extruder::wait_for_temperature()
      temperature_error();
 }
 
+inline int extruder::get_last_temperature(long maxAge_ms)
+{
+  if (  (maxAge_ms > 0) && (millis() -last_celsius_time > maxAge_ms )  )
+    return get_temperature();
+  else
+    return last_celsius;
+}
+
 inline void extruder::set_direction(bool dir)
 {
-	e_direction = dir;
-	digitalWrite(motor_dir_pin, e_direction); 
+    digitalWrite(motor_dir_pin, dir);
 }
 
 inline void extruder::set_cooler(byte sp)

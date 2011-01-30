@@ -14,6 +14,13 @@ struct FloatPoint
 	float z;
         float e;   // Extrude length
         float f;   // Feedrate
+        
+        FloatPoint()
+        {}
+
+        FloatPoint(float x, float y, float z, float e, float f)
+          : x(x), y(y), z(z), e(e), f(f)
+        {}
 };
 
 inline FloatPoint operator+(const FloatPoint& a, const FloatPoint& b)
@@ -96,7 +103,7 @@ inline LongPoint operator-(const LongPoint& a, const LongPoint& b)
   result.e = a.e - b.e;
   result.f = a.f - b.f;
   return result;
-} 
+}
 
 
 inline LongPoint absv(const LongPoint& a)
@@ -122,9 +129,19 @@ inline LongPoint roundv(const FloatPoint& a)
   return result;
 } 
 
-inline LongPoint to_steps(const FloatPoint& units, const FloatPoint& position)
+inline LongPoint to_steps(const FloatPoint& units, const FloatPoint& world)
 {
-        return roundv(units*position);
+        return roundv(units*world);
+}
+
+inline FloatPoint to_world(const FloatPoint& units, const LongPoint& steps)
+{
+  return FloatPoint(
+    steps.x / units.x,
+    steps.y / units.y,
+    steps.z / units.z,
+    steps.e / units.e,
+    steps.f / units.f);
 }
 
 #endif

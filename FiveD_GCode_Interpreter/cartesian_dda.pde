@@ -63,32 +63,12 @@ cartesian_dda::cartesian_dda()
 	pinMode(Z_MAX_PIN, INPUT);
 #endif
 	
-        // Default units are mm
-        
-        set_units(true);
+
+#if E_SHUTDOWN_STEPS > 0
+        stop_extruder = false;
+        start_extruder = false;
+#endif
 }
-
-// Switch between mm and inches
-
-void cartesian_dda::set_units(bool using_mm)
-{
-    if(using_mm)
-    {
-      units.x = X_STEPS_PER_MM;
-      units.y = Y_STEPS_PER_MM;
-      units.z = Z_STEPS_PER_MM;
-      units.e = E_STEPS_PER_MM;
-      units.f = 1.0;
-    } else
-    {
-      units.x = X_STEPS_PER_INCH;
-      units.y = Y_STEPS_PER_INCH;
-      units.z = Z_STEPS_PER_INCH;
-      units.e = E_STEPS_PER_INCH;
-      units.f = 1.0;
-    }
-}
-
 
 void cartesian_dda::set_target(const FloatPoint& p)
 {
@@ -97,7 +77,7 @@ void cartesian_dda::set_target(const FloatPoint& p)
         
 	//figure our deltas.
 
-        delta_position = fabsv(target_position - where_i_am);
+        delta_position = fabsv(target_position - where_i_am_world);
         
         // The feedrate values refer to distance in (X, Y, Z) space, so ignore e and f
         // values unless they're the only thing there.
@@ -114,7 +94,7 @@ void cartesian_dda::set_target(const FloatPoint& p)
                                                                                    			
 	//set our steps current, target, and delta
 
-        current_steps = to_steps(units, where_i_am);
+        current_steps = where_i_am_steps;
 	target_steps = to_steps(units, target_position);
 	delta_steps = absv(target_steps - current_steps);
 
@@ -130,12 +110,19 @@ void cartesian_dda::set_target(const FloatPoint& p)
         if(total_steps == 0)
         {
           nullmove = true;
-          where_i_am = p;
+          where_i_am_steps.f = p.f;
+          where_i_am_world.f = p.f;
           return;
         }    
 
 #ifndef ACCELERATION_ON
         current_steps.f = round(target_position.f);
+#endif
+
+#if E_SHUTDOWN_STEPS > 0
+        bool has_extruder = (delta_steps.e != 0);
+        stop_extruder = has_extruder;
+        start_extruder = has_extruder;
 #endif
 
         delta_steps.f = abs(target_steps.f - current_steps.f);
@@ -162,40 +149,46 @@ void cartesian_dda::set_target(const FloatPoint& p)
         	
 	//what is our direction?
 
-	x_direction = (target_position.x >= where_i_am.x);
-	y_direction = (target_position.y >= where_i_am.y);
-	z_direction = (target_position.z >= where_i_am.z);
-	e_direction = (target_position.e >= where_i_am.e);
-	f_direction = (target_position.f >= where_i_am.f);
+	x_direction = (target_steps.x >= where_i_am_steps.x);
+	y_direction = (target_steps.y >= where_i_am_steps.y);
+	z_direction = (target_steps.z >= where_i_am_steps.z);
+	e_direction = (target_steps.e >= where_i_am_steps.e);
+	f_direction = (target_steps.f >= where_i_am_steps.f);
 
 	dda_counter.x = -total_steps/2;
 	dda_counter.y = dda_counter.x;
 	dda_counter.z = dda_counter.x;
         dda_counter.e = dda_counter.x;
         dda_counter.f = dda_counter.x;
-  
-        where_i_am = p;
+
+        where_i_am_steps.x += delta_steps.x * (x_direction ? 1 : -1);
+        where_i_am_steps.y += delta_steps.y * (y_direction ? 1 : -1);
+        where_i_am_steps.z += delta_steps.z * (z_direction ? 1 : -1);
+        where_i_am_steps.e += delta_steps.e * (e_direction ? 1 : -1);
+        where_i_am_steps.f = p.f;
+
+        where_i_am_world = to_world(units, where_i_am_steps);
         
         return;        
 }
 
 
 
-void cartesian_dda::dda_step()
-{  
+inline void cartesian_dda::dda_step()
+{
   if(!live)
    return;
    
   do
   {
-		x_can_step = can_step(X_MIN_PIN, X_MAX_PIN, current_steps.x, target_steps.x, x_direction);
-		y_can_step = can_step(Y_MIN_PIN, Y_MAX_PIN, current_steps.y, target_steps.y, y_direction);
-		z_can_step = can_step(Z_MIN_PIN, Z_MAX_PIN, current_steps.z, target_steps.z, z_direction);
-                e_can_step = can_step(-1, -1, current_steps.e, target_steps.e, e_direction);
-                f_can_step = can_step(-1, -1, current_steps.f, target_steps.f, f_direction);
+		x_can_step = can_step(X_MIN_PIN, X_MAX_PIN, X_MAX_STEPS, current_steps.x, target_steps.x, x_direction);
+		y_can_step = can_step(Y_MIN_PIN, Y_MAX_PIN, Y_MAX_STEPS, current_steps.y, target_steps.y, y_direction);
+		z_can_step = can_step(Z_MIN_PIN, Z_MAX_PIN, Z_MAX_STEPS, current_steps.z, target_steps.z, z_direction);
+                e_can_step = (current_steps.e != target_steps.e);
+                f_can_step = (current_steps.f != target_steps.f);
                 
                 real_move = false;
-                
+
 		if (x_can_step)
 		{
 			dda_counter.x += delta_steps.x;
@@ -278,7 +271,7 @@ void cartesian_dda::dda_step()
 			}
 		}
 
-				
+
       // wait for next step.
       // Use milli- or micro-seconds, as appropriate
       // If the only thing that changed was f keep looping
@@ -301,7 +294,25 @@ void cartesian_dda::dda_step()
 
   if(!live)
   {
-      disable_steppers();
+#if E_SHUTDOWN_STEPS > 0
+        if(e_direction)
+          ex[extruder_in_use]->set_direction(EXTRUDER_REVERSE);
+        else
+          ex[extruder_in_use]->set_direction(EXTRUDER_FORWARD);
+
+        if (stop_extruder)
+        {
+          // Change the flag to protect qMove from a race condition.
+          stop_extruder = false;
+          for (int i = 0; i < E_SHUTDOWN_STEPS; i++)
+          {
+            do_e_step();
+            delayMicroseconds(5);
+          }
+        }
+#endif
+
+      //disable_steppers();
       setTimer(DEFAULT_TICK);
   }    
   
@@ -316,7 +327,7 @@ void cartesian_dda::dda_start()
   
   if(nullmove)
     return;
-    
+
   	//set our direction pins as well
 #if INVERT_X_DIR == 1
 	digitalWrite(X_DIR_PIN, !x_direction);
@@ -339,19 +350,25 @@ void cartesian_dda::dda_start()
           ex[extruder_in_use]->set_direction(EXTRUDER_FORWARD);
         else
           ex[extruder_in_use]->set_direction(EXTRUDER_REVERSE);
-  
-    //turn on steppers to start moving =)
-    
-	enable_steppers();
-        
-       // extcount = 0;
 
+#if E_SHUTDOWN_STEPS > 0
+        if (start_extruder)
+        {
+          for (int i = 0; i < E_SHUTDOWN_STEPS; i++)
+            {
+            do_e_step();
+            delayMicroseconds(5);
+            }
+        }
+#endif
+
+	//enable_steppers();
         setTimer(DEFAULT_TICK);
 	live = true;
 }
 
 
-bool cartesian_dda::can_step(byte min_pin, byte max_pin, long current, long target, byte dir)
+inline bool cartesian_dda::can_step(byte min_pin, byte max_pin, long max_steps, long current, long target, byte dir)
 {
 
   //stop us if we're on target
@@ -364,7 +381,7 @@ bool cartesian_dda::can_step(byte min_pin, byte max_pin, long current, long targ
 
   //stop us if we're home and still going
   
-	if(!dir && min_pin >= 0)
+	if(  (!dir) && (min_pin >= 0) && (min_pin < 128)  )
         {
           if (read_switch(min_pin))
 		return false;
@@ -375,10 +392,19 @@ bool cartesian_dda::can_step(byte min_pin, byte max_pin, long current, long targ
 
   //stop us if we're at max and still going
   
-	if(dir && max_pin >= 0)
+	if(  (dir) && (max_pin >= 0) && (max_pin < 128)  )
         {
  	    if (read_switch(max_pin))
  		return false;
+        }
+        
+#else
+
+  //stop us if we're at max and still going
+
+	if(  (dir) && (current >= max_steps)  )
+        {
+            return false;
         }
 #endif
 
@@ -390,9 +416,10 @@ bool cartesian_dda::can_step(byte min_pin, byte max_pin, long current, long targ
 
 
 
-void cartesian_dda::enable_steppers()
+inline void cartesian_dda::enable_steppers()
 {
 #if MOTHERBOARD > 0
+#if 0
  if(delta_steps.x)
     digitalWrite(X_ENABLE_PIN, ENABLE_ON);
   if(delta_steps.y)    
@@ -401,14 +428,16 @@ void cartesian_dda::enable_steppers()
     digitalWrite(Z_ENABLE_PIN, ENABLE_ON);
   if(delta_steps.e)
     ex[extruder_in_use]->enableStep();
+#endif
 #endif  
 }
 
 
 
-void cartesian_dda::disable_steppers()
+inline void cartesian_dda::disable_steppers()
 {
 #if MOTHERBOARD > 0
+#if 0
 	//disable our steppers
 	digitalWrite(X_ENABLE_PIN, !ENABLE_ON);
 	digitalWrite(Y_ENABLE_PIN, !ENABLE_ON);
@@ -418,6 +447,7 @@ void cartesian_dda::disable_steppers()
         // turn the motor the wrong way.  Leave it on.
         
         //ex[extruder_in_use]->->disableStep();       
+        #endif
 #endif
 }
 

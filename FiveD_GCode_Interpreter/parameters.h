@@ -36,35 +36,43 @@
 #define X_STEPS_PER_MM   9.8482399079
 #define X_STEPS_PER_INCH (X_STEPS_PER_MM*INCHES_TO_MM)
 #define X_MOTOR_STEPS    400
+#define X_MAX_MM         175
+#define X_MAX_STEPS      (X_MAX_MM * X_STEPS_PER_MM)
 #define INVERT_X_DIR 0
 
 #define Y_STEPS_PER_MM   9.8482399079
 #define Y_STEPS_PER_INCH (Y_STEPS_PER_MM*INCHES_TO_MM)
 #define Y_MOTOR_STEPS    400
+#define Y_MAX_MM         175
+#define Y_MAX_STEPS      (Y_MAX_MM * Y_STEPS_PER_MM)
 #define INVERT_Y_DIR 1
 
 #define Z_STEPS_PER_MM   160 // 200 steps per revoloution / 1.25 mm thread pitch
 #define Z_STEPS_PER_INCH (Z_STEPS_PER_MM*INCHES_TO_MM)
 #define Z_MOTOR_STEPS    200
+#define Z_MAX_MM         175
+#define Z_MAX_STEPS      (Z_MAX_MM * Z_STEPS_PER_MM)
 #define INVERT_Z_DIR 0
 
 // For when we have a stepper-driven extruder
 // E_STEPS_PER_MM is the number of steps needed to 
 // extrude 1mm out of the nozzle.
 
-#define E_STEPS_PER_MM   0.7525056 // drive diameter = 4.7 mm, material in:material out = 36:1, 400 steps per revolution
+//#define E_STEPS_PER_MM   0.7525056 // direct drive stepper
+#define E_STEPS_PER_MM   1
 #define E_STEPS_PER_INCH (E_STEPS_PER_MM*INCHES_TO_MM)
 #define E_MOTOR_STEPS    400
+#define E_SHUTDOWN_STEPS 0
 
 //our maximum feedrates
 #define FAST_XY_FEEDRATE 4000.0
-#define FAST_Z_FEEDRATE  100.0
+#define FAST_Z_FEEDRATE  25.0
 
 // Data for acceleration calculations
 // Comment out the next line to turn accelerations off
 //#define ACCELERATION_ON
 #define SLOW_XY_FEEDRATE 1000.0 // Speed from which to start accelerating
-#define SLOW_Z_FEEDRATE 20
+#define SLOW_Z_FEEDRATE 15
 
 // Set to 1 if enable pins are inverting
 // For RepRap stepper boards version 1.x the enable pins are *not* inverting.

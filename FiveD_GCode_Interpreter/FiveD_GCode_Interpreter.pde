@@ -28,6 +28,7 @@
 
 // Maintain a list of extruders...
 
+bool debugLoop = false;
 extruder* ex[EXTRUDER_COUNT];
 byte extruder_in_use = 0;
 
@@ -78,7 +79,10 @@ volatile byte tail;
 
 // Where the machine is from the point of view of the command stream
 
-FloatPoint where_i_am;
+LongPoint where_i_am_steps;    // Number of steps from home position
+FloatPoint where_i_am_world;   // Distance from home position in world units (mm or inches).  This should never be modified directly, instead call to_world(where_i_am_steps) or setPostion.
+FloatPoint units;              // steps/mm or steps/inch
+bool extruder_running;
 
 // Make sure each DDA knows which extruder to use
 
@@ -103,6 +107,7 @@ ISR(TIMER1_COMPA_vect)
   enableTimerInterrupt();
 }
 
+long loopTime;
 void setup()
 {
   disableTimerInterrupt();
@@ -127,50 +132,84 @@ void setup()
   
   init_process_string();
   
-  where_i_am.x = 0.0;
-  where_i_am.y = 0.0;
-  where_i_am.z = 0.0;
-  where_i_am.e = 0.0;
-  where_i_am.f = SLOW_XY_FEEDRATE;
+  where_i_am_steps.x = 0;
+  where_i_am_steps.y = 0;
+  where_i_am_steps.z = 0;
+  where_i_am_steps.e = 0;
+  where_i_am_steps.f = SLOW_XY_FEEDRATE;
+
+  // Set units to mm.  This also initializes where_i_am_world as a side affect.
+  setUnits(true);
   
+  extruder_running = false;
+  
+  //Serial.begin(9600);
   Serial.begin(19200);
   Serial.println("start");
   
   setTimer(DEFAULT_TICK);
   enableTimerInterrupt();
 
+  loopTime = millis() + 2000;
 }
 
 bool idling = true;
 bool waitingForIdle = false;
-signed long idleTimeout = 0;
+long startOfIdle = 0;
+long loopCount = 0;
+
+void standby()
+{
+  pinMode(POWER_SUPPLY_PIN, INPUT);    // Set the pin to floating to turn off power supply
+  idling = true;
+}
+
+void wakeup()
+{
+  pinMode(POWER_SUPPLY_PIN, OUTPUT);
+  digitalWrite(POWER_SUPPLY_PIN, 0);  // Set the pin to GND to turn on power supply
+  idling = false;
+  waitingForIdle = true;
+}
+
+
 void loop()
 {
+#if 0
+        long currentTime = millis();
+        loopCount++;
+        while (currentTime > loopTime)
+          {
+            Serial.print("Cycles/second = ");
+            Serial.print((int)loopCount/2);
+            Serial.println();
+            
+            Serial.print("millis() = ");
+            Serial.print((int)currentTime);
+            Serial.println();
+
+            loopTime += 2000;
+            loopCount = 0;
+          }
+#endif
+
 	manage_all_extruders();
         if (get_and_do_command())
         {
                 if (idling)
-                {
-                        pinMode(POWER_SUPPLY_PIN, OUTPUT);
-                        digitalWrite(POWER_SUPPLY_PIN, 0);  // Set the pin to GND to turn on power supply
-                        idling = false;
-                        waitingForIdle = true;
-                }
+                    wakeup();
         }
         else if (  (!idling) && (qEmpty()) && (ex[extruder_in_use]->get_target_temperature() < 1)  )
         {
                 if (waitingForIdle)
                 {
-                        idleTimeout = (signed long)millis() + 10000;
+                        startOfIdle = millis();
                         waitingForIdle = false;
                 }
                 else
                 {
-                        if (idleTimeout - (signed long)millis() < 0)
-                        {
-                                pinMode(POWER_SUPPLY_PIN, INPUT);    // Set the pin to floating to turn off power supply
-                                idling = true;
-                        }
+                        if (millis() - startOfIdle > 10000)
+                           standby();
                 }
         }
 }
@@ -194,20 +233,40 @@ inline bool qEmpty()
 
 inline void qMove(const FloatPoint& p)
 {
-  while(qFull()) delay(WAITING_DELAY);
+  while(qFull())
+  {
+    manage_all_extruders();
+    delay(WAITING_DELAY);
+  }
   byte h = head; 
   h++;
   if(h >= BUFFER_SIZE)
     h = 0;
   cdda[h]->set_target(p);
+  
+#if E_SHUTDOWN_STEPS > 0
+  if (  (extruder_running) && (cdda[h]->get_start_extruder()) && (cdda[head]->get_stop_extruder())  )
+  {
+    // Remove the extra stop/start with no pause between them
+    cdda[head]->set_stop_extruder(false);
+    cdda[h]->set_start_extruder(false);
+  }
+  else
+  {
+    extruder_running = cdda[h]->get_start_extruder();
+  }
+#endif
+  
   head = h;
 }
 
 inline void dQMove()
 {
+  static byte t;
+  
   if(qEmpty())
     return;
-  byte t = tail;  
+  t = tail;  
   t++;
   if(t >= BUFFER_SIZE)
     t = 0;
@@ -215,16 +274,32 @@ inline void dQMove()
   tail = t; 
 }
 
-inline void setUnits(bool u)
+inline void setUnits(bool using_mm)
 {
-   for(byte i = 0; i < BUFFER_SIZE; i++)
-     cdda[i]->set_units(u); 
+    if(using_mm)
+    {
+      units.x = X_STEPS_PER_MM;
+      units.y = Y_STEPS_PER_MM;
+      units.z = Z_STEPS_PER_MM;
+      units.e = E_STEPS_PER_MM;
+      units.f = 1.0;
+    } else
+    {
+      units.x = X_STEPS_PER_INCH;
+      units.y = Y_STEPS_PER_INCH;
+      units.z = Z_STEPS_PER_INCH;
+      units.e = E_STEPS_PER_INCH;
+      units.f = 1.0;
+    }
+    
+    where_i_am_world = to_world(units, where_i_am_steps);
 }
 
 
 inline void setPosition(const FloatPoint& p)
 {
-  where_i_am = p;  
+  where_i_am_steps = to_steps(units, p);
+  where_i_am_world = to_world(units, where_i_am_steps);
 }
 
 
@@ -232,7 +307,7 @@ inline void setPosition(const FloatPoint& p)
 
 // Interrupt functions
 
-void setupTimerInterrupt()
+inline void setupTimerInterrupt()
 {
 	//clear the registers
 	TCCR1A = 0;
@@ -257,7 +332,7 @@ void setupTimerInterrupt()
 	setTimerCeiling(65535);
 }
 
-void setTimerResolution(byte r)
+inline void setTimerResolution(byte r)
 {
 	//here's how you figure out the tick size:
 	// 1000000 / ((16000000 / prescaler))
@@ -307,7 +382,7 @@ void setTimerResolution(byte r)
 	}
 }
 
-unsigned int getTimerCeiling(const long& delay)
+inline unsigned int getTimerCeiling(const long& delay)
 {
 	// our slowest speed at our highest resolution ( (2^16-1) * 0.0625 usecs = 4095 usecs)
 	if (delay <= 65535L)
@@ -329,7 +404,7 @@ unsigned int getTimerCeiling(const long& delay)
 		return 65535;
 }
 
-byte getTimerResolution(const long& delay)
+inline byte getTimerResolution(const long& delay)
 {
 	// these also represent frequency: 1000000 / delay / 2 = frequency in hz.
 	

@@ -226,7 +226,7 @@
 #define Z_MAX_PIN (byte)-1
 #define Z_ENABLE_PIN (byte)-1
 
-#define BASE_HEATER_PIN   (byte)1
+#define BASE_HEATER_PIN   (byte)-1
 #define POWER_SUPPLY_PIN (byte)16
 
 //extruder pins
